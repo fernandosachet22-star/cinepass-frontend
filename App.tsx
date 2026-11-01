@@ -129,6 +129,7 @@ export default function App() {
   const [reservaId, setReservaId] = useState<number | null>(null);
   const [reservaAssentos, setReservaAssentos] = useState<string[]>([]);
   const [confirmandoCompra, setConfirmandoCompra] = useState(false);
+  const [modoBalcao, setModoBalcao] = useState(false);
 
   const [codigoIngresso, setCodigoIngresso] = useState('');
   const [ingressoConsultado, setIngressoConsultado] = useState<Ingresso | null>(null);
@@ -146,6 +147,11 @@ export default function App() {
   const [filmeEditandoId, setFilmeEditandoId] = useState<number | null>(null);
 
   const [salas, setSalas] = useState<Sala[]>([]);
+  const [nomeSala, setNomeSala] = useState('');
+  const [fileirasSala, setFileirasSala] = useState('');
+  const [assentosPorFileiraSala, setAssentosPorFileiraSala] = useState('');
+  const [cadastrandoSala, setCadastrandoSala] = useState(false);
+
   const [filmeSessaoId, setFilmeSessaoId] = useState<number | null>(null);
   const [salaSessaoId, setSalaSessaoId] = useState<number | null>(null);
   const [dataSessao, setDataSessao] = useState('');
@@ -438,6 +444,85 @@ export default function App() {
     }
   }
 
+  async function venderNoBalcao() {
+    if (!token || !usuario || (usuario.perfil !== 'OPERADOR' && usuario.perfil !== 'ADMINISTRADOR')) {
+      avisar('Apenas operadores podem realizar vendas no balcão.');
+      return;
+    }
+
+    if (!sessaoSelecionada || assentosSelecionados.length === 0) {
+      avisar('Selecione pelo menos um assento.');
+      return;
+    }
+
+    if (reservando || confirmandoCompra) return;
+
+    try {
+      setReservando(true);
+
+      const respostaReserva = await fetch(`${API}/reservas/balcao`, {
+        method: 'POST',
+        headers: headersAutenticados(true),
+        body: JSON.stringify({
+          sessaoId: sessaoSelecionada.id,
+          assentosIds: assentosSelecionados,
+        }),
+      });
+
+      const dadosReserva = await respostaReserva.json();
+      if (!respostaReserva.ok) {
+        throw new Error(dadosReserva.erro || 'Não foi possível reservar os assentos para a venda.');
+      }
+
+      const idReserva = dadosReserva.reserva.id;
+
+      setConfirmandoCompra(true);
+
+      const respostaCompra = await fetch(`${API}/compras/balcao/${idReserva}/confirmar`, {
+        method: 'POST',
+        headers: headersAutenticados(),
+      });
+
+      const dadosCompra = await respostaCompra.json();
+      if (!respostaCompra.ok) {
+        throw new Error(dadosCompra.erro || 'A reserva foi criada, mas não foi possível confirmar a venda.');
+      }
+
+      const compra = dadosCompra.compra;
+      const codigosAssentos = compra.assentos
+        .map((item: { assento: { codigo: string } }) => item.assento.codigo)
+        .join(', ');
+      const codigosIngressos = compra.assentos
+        .map((item: { ingresso?: { codigo: string } | null }) => item.ingresso?.codigo || 'Não informado')
+        .join('\\n');
+      const total = (
+        compra.assentos.length * Number(compra.sessao.preco)
+      ).toFixed(2).replace('.', ',');
+
+      setAssentosSelecionados([]);
+      setModoBalcao(false);
+
+      avisar(
+        `VENDA NO BALCÃO CONFIRMADA!\\n\\nFilme: ${compra.sessao.filme.titulo}\\n` +
+        `Sala: ${compra.sessao.sala.nome}\\nAssentos: ${codigosAssentos}\\n` +
+        `Total: R$ ${total}\\n\\nCÓDIGOS DOS INGRESSOS:\\n${codigosIngressos}`
+      );
+
+      const respostaAssentos = await fetch(`${API}/sessoes/${sessaoSelecionada.id}/assentos`);
+      if (respostaAssentos.ok) {
+        const dadosAssentos = await respostaAssentos.json();
+        setAssentos(dadosAssentos.assentos);
+      }
+      setTela('operador');
+    } catch (error) {
+      avisar(error instanceof Error ? error.message : 'Erro ao realizar venda no balcão.');
+      if (sessaoSelecionada) await carregarAssentos(sessaoSelecionada);
+    } finally {
+      setReservando(false);
+      setConfirmandoCompra(false);
+    }
+  }
+
   async function consultarIngresso() {
     const codigo = codigoIngresso.trim().replace(/[\s"'`]/g, '');
     if (!codigo) {
@@ -620,6 +705,55 @@ export default function App() {
       avisar(error instanceof Error ? error.message : 'Erro ao carregar salas.');
     } finally {
       setCarregandoSalas(false);
+    }
+  }
+
+  async function cadastrarSala() {
+    const fileiras = Number(fileirasSala);
+    const assentosPorFileira = Number(assentosPorFileiraSala);
+
+    if (!nomeSala.trim()) {
+      return avisar('Informe o nome da sala.');
+    }
+
+    if (!Number.isInteger(fileiras) || fileiras < 1 || fileiras > 26) {
+      return avisar('Informe entre 1 e 26 fileiras.');
+    }
+
+    if (!Number.isInteger(assentosPorFileira) || assentosPorFileira < 1) {
+      return avisar('Informe uma quantidade válida de assentos por fileira.');
+    }
+
+    try {
+      setCadastrandoSala(true);
+
+      const resposta = await fetch(`${API}/salas`, {
+        method: 'POST',
+        headers: headersAutenticados(true),
+        body: JSON.stringify({
+          nome: nomeSala.trim(),
+          fileiras,
+          assentosPorFileira,
+        }),
+      });
+
+      const dados = await resposta.json();
+
+      if (!resposta.ok) {
+        throw new Error(dados.mensagem || 'Não foi possível cadastrar a sala.');
+      }
+
+      setSalas((atuais) => [...atuais, dados.sala]);
+      setNomeSala('');
+      setFileirasSala('');
+      setAssentosPorFileiraSala('');
+
+      avisar('Sala cadastrada com sucesso!');
+      setTela('operador');
+    } catch (error) {
+      avisar(error instanceof Error ? error.message : 'Erro ao cadastrar sala.');
+    } finally {
+      setCadastrandoSala(false);
     }
   }
 
@@ -913,26 +1047,68 @@ export default function App() {
           </View>
         )}
 
+        {tela === 'filmesBalcao' && (
+          <View style={styles.secao}>
+            <Text style={styles.secaoTitulo}>Venda no balcão</Text>
+            <Text style={styles.secaoDescricao}>Selecione o filme para consultar as sessões disponíveis</Text>
+            {filmes.map((filme) => (
+              <View style={styles.filmeCard} key={filme.id}>
+                <Image
+                  source={{ uri: filme.imagem?.startsWith('http') ? filme.imagem : 'https://image.tmdb.org/t/p/w500/gEU2QniE6E77NI6lCU6MxlNBvIx.jpg' }}
+                  style={styles.poster}
+                />
+                <View style={styles.filmeInfo}>
+                  <Text style={styles.filmeTitulo}>{filme.titulo}</Text>
+                  <Text style={styles.filmeGenero}>{filme.genero}</Text>
+                  <Text style={styles.filmeDetalhes}>{filme.classificacao} • {filme.duracao} min</Text>
+                  <TouchableOpacity style={styles.botaoIngresso} onPress={() => carregarSessoes(filme)}>
+                    <Text style={styles.botaoIngressoTexto}>SELECIONAR FILME</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            ))}
+            <TouchableOpacity onPress={() => { setModoBalcao(false); setTela('operador'); }}>
+              <Text style={styles.voltar}>VOLTAR AO PAINEL</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
         {tela === 'cadastro' && (
           <View style={styles.secao}>
             <Text style={styles.secaoTitulo}>
               {filmeEditandoId !== null ? 'Editar filme' : 'Cadastrar filme'}
             </Text>
-            <Text style={styles.secaoDescricao}>
-              {filmeEditandoId !== null
-                ? 'Altere os dados do filme selecionado.'
-                : 'Preencha os dados para adicionar um filme.'}
-            </Text>
+            <Text style={styles.secaoDescricao}>Preencha as informações do filme</Text>
             {campo(titulo, setTitulo, 'Título do filme')}
-            {campo(descricao, setDescricao, 'Descrição', true)}
-            {campo(duracao, setDuracao, 'Duração (minutos)', false, 'numeric')}
-            {campo(classificacao, setClassificacao, 'Classificação (ex: 12 anos)')}
-            {campo(genero, setGenero, 'Gênero')}
-            {campo(imagem, setImagem, 'URL da Imagem (Poster)')}
+            {campo(descricao, setDescricao, 'Descrição / Sinopse', true)}
+            {campo(duracao, setDuracao, 'Duração (em minutos)', false, 'numeric')}
+            {campo(classificacao, setClassificacao, 'Classificação (ex: Livre, 14 anos)')}
+            {campo(genero, setGenero, 'Gênero (ex: Ação, Drama)')}
+            {campo(imagem, setImagem, 'URL da imagem do pôster')}
             <TouchableOpacity style={styles.botao} onPress={cadastrarFilme}>
               <Text style={styles.botaoTexto}>
-                {filmeEditandoId !== null ? 'ATUALIZAR FILME' : 'SALVAR FILME'}
+                {filmeEditandoId !== null ? 'SALVAR ALTERAÇÕES' : 'CADASTRAR FILME'}
               </Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => { setFilmeEditandoId(null); setTela('operador'); }}>
+              <Text style={styles.voltar}>VOLTAR AO PAINEL</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {tela === 'cadastroSala' && (
+          <View style={styles.secao}>
+            <Text style={styles.secaoTitulo}>Cadastrar nova sala</Text>
+            <Text style={styles.secaoDescricao}>Defina o nome e a estrutura de assentos da sala</Text>
+            {campo(nomeSala, setNomeSala, 'Nome da sala (ex: Sala 1 VIP)')}
+            {campo(fileirasSala, setFileirasSala, 'Quantidade de fileiras (1 a 26)', false, 'numeric')}
+            {campo(assentosPorFileiraSala, setAssentosPorFileiraSala, 'Assentos por fileira', false, 'numeric')}
+            <TouchableOpacity
+              style={[styles.botao, cadastrandoSala && styles.botaoDesativado]}
+              onPress={cadastrarSala}
+              disabled={cadastrandoSala}
+            >
+              <Text style={styles.botaoTexto}>{cadastrandoSala ? 'CADASTRANDO...' : 'CADASTRAR SALA'}</Text>
             </TouchableOpacity>
             <TouchableOpacity onPress={() => setTela('operador')}>
               <Text style={styles.voltar}>VOLTAR AO PAINEL</Text>
@@ -940,198 +1116,22 @@ export default function App() {
           </View>
         )}
 
-        {tela === 'sessoes' && (
-          <View style={styles.secao}>
-            <Text style={styles.secaoTitulo}>Sessões disponíveis</Text>
-            <Text style={styles.secaoDescricao}>
-              {filmeSelecionado ? filmeSelecionado.titulo : 'Escolha uma sessão'}
-            </Text>
-            {carregandoSessoes && <Text style={styles.mensagem}>Carregando sessões...</Text>}
-            {!carregandoSessoes && sessoes.length === 0 && (
-              <Text style={styles.mensagem}>Nenhuma sessão encontrada para este filme.</Text>
-            )}
-            {sessoes.map((sessao) => {
-              const dataFormatada = new Date(sessao.dataHora).toLocaleString('pt-BR', {
-                dateStyle: 'short',
-                timeStyle: 'short',
-              });
-              const precoFormatado = Number(sessao.preco).toFixed(2).replace('.', ',');
-              return (
-                <View style={styles.sessaoCard} key={sessao.id}>
-                  <View>
-                    <Text style={styles.sessaoSala}>{sessao.sala.nome}</Text>
-                    <Text style={styles.sessaoData}>{dataFormatada}</Text>
-                    <Text style={styles.sessaoPreco}>R$ {precoFormatado}</Text>
-                  </View>
-                  <TouchableOpacity
-                    style={styles.botaoIngresso}
-                    onPress={() => carregarAssentos(sessao)}
-                  >
-                    <Text style={styles.botaoIngressoTexto}>ESCOLHER ASSENTOS</Text>
-                  </TouchableOpacity>
-                </View>
-              );
-            })}
-            <TouchableOpacity style={styles.voltarBotao} onPress={() => setTela('inicio')}>
-              <Text style={styles.voltar}>VOLTAR AOS FILMES</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-
-        {tela === 'assentos' && (
-          <View style={styles.secao}>
-            <Text style={styles.secaoTitulo}>Escolha seus assentos</Text>
-            <Text style={styles.secaoDescricao}>
-              {sessaoSelecionada
-                ? `${sessaoSelecionada.filme.titulo} - ${sessaoSelecionada.sala.nome}`
-                : 'Selecione os assentos desejados'}
-            </Text>
-            {carregandoAssentos && <Text style={styles.mensagem}>Carregando assentos...</Text>}
-            <View style={styles.telaCinemaContainer}>
-              <View style={styles.telaCinemaBarra} />
-              <Text style={styles.telaCinemaTexto}>TELA</Text>
-            </View>
-            <View style={styles.assentosGrid}>
-              {assentos.map((assento) => {
-                const ocupado = ['OCUPADO', 'RESERVADO', 'VENDIDO'].includes(assento.status);
-                const selecionado = assentosSelecionados.includes(assento.id);
-                return (
-                  <TouchableOpacity
-                    key={assento.id}
-                    style={[
-                      styles.assentoBotao,
-                      ocupado && styles.assentoOcupado,
-                      selecionado && styles.assentoSelecionado,
-                    ]}
-                    onPress={() => !ocupado && selecionarAssento(assento.id)}
-                    disabled={ocupado}
-                  >
-                    <Text style={styles.assentoTexto}>
-                      {assento.codigo}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-            <View style={styles.legendaContainer}>
-              <View style={styles.legendaItem}>
-                <View style={[styles.assentoBotao, { width: 20, height: 20 }]} />
-                <Text style={styles.legendaTexto}>Disponível</Text>
-              </View>
-              <View style={styles.legendaItem}>
-                <View
-                  style={[
-                    styles.assentoBotao,
-                    styles.assentoSelecionado,
-                    { width: 20, height: 20 },
-                  ]}
-                />
-                <Text style={styles.legendaTexto}>Selecionado</Text>
-              </View>
-              <View style={styles.legendaItem}>
-                <View
-                  style={[styles.assentoBotao, styles.assentoOcupado, { width: 20, height: 20 }]}
-                />
-                <Text style={styles.legendaTexto}>Ocupado</Text>
-              </View>
-            </View>
-            <TouchableOpacity
-              style={[styles.botao, reservando && styles.botaoDesativado]}
-              onPress={reservarAssentos}
-              disabled={reservando}
-            >
-              <Text style={styles.botaoTexto}>
-                {reservando ? 'RESERVANDO...' : 'AVANÇAR PARA PAGAMENTO'}
-              </Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.voltarBotao}
-              onPress={() => {
-                if (sessaoSelecionada) carregarSessoes(sessaoSelecionada.filme);
-              }}
-            >
-              <Text style={styles.voltar}>VOLTAR ÀS SESSÕES</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-
-        {tela === 'pagamento' && (
-          <View style={styles.secao}>
-            <Text style={styles.secaoTitulo}>Pagamento da Reserva</Text>
-            <Text style={styles.secaoDescricao}>Confirme os dados para finalizar sua compra.</Text>
-            {sessaoSelecionada && (
-              <View style={styles.resumoContainer}>
-                <Text style={styles.resumoTitulo}>{sessaoSelecionada.filme.titulo}</Text>
-                <Text style={styles.resumoTexto}>Sala: {sessaoSelecionada.sala.nome}</Text>
-                <Text style={styles.resumoTexto}>
-                  Assentos: {reservaAssentos.join(', ')}
-                </Text>
-                <Text style={styles.resumoTexto}>
-                  Total: R${' '}
-                  {(
-                    reservaAssentos.length * Number(sessaoSelecionada.preco)
-                  ).toFixed(2).replace('.', ',')}
-                </Text>
-              </View>
-            )}
-            <TouchableOpacity
-              style={[styles.botao, confirmandoCompra && styles.botaoDesativado]}
-              onPress={confirmarCompra}
-              disabled={confirmandoCompra}
-            >
-              <Text style={styles.botaoTexto}>
-                {confirmandoCompra ? 'PROCESSANDO...' : 'CONFIRMAR COMPRA'}
-              </Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.voltarBotao} onPress={() => setTela('inicio')}>
-              <Text style={styles.voltar}>CANCELAR / VOLTAR AO INÍCIO</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-
-        {tela === 'meusIngressos' && (
-          <View style={styles.secao}>
-            <Text style={styles.secaoTitulo}>Meus Ingressos</Text>
-            <Text style={styles.secaoDescricao}>Histórico de ingressos adquiridos.</Text>
-
-            {carregandoIngressosCliente && <Text style={styles.mensagem}>Carregando ingressos...</Text>}
-
-            {!carregandoIngressosCliente && ingressosCliente.length === 0 && (
-              <Text style={styles.mensagem}>Você ainda não possui ingressos cadastrados.</Text>
-            )}
-
-            {ingressosCliente.map((ing) => {
-              const sessaoInfo = ing.reservaAssento?.reserva?.sessao;
-              const dataFormatada = sessaoInfo?.dataHora
-                ? new Date(sessaoInfo.dataHora).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })
-                : 'Data não informada';
-
-              return (
-                <View style={styles.resumoContainer} key={ing.id}>
-                  <Text style={styles.resumoTitulo}>{sessaoInfo?.filme?.titulo || 'Filme'}</Text>
-                  <Text style={styles.resumoTexto}>Sala: {sessaoInfo?.sala?.nome || 'Sala'}</Text>
-                  <Text style={styles.resumoTexto}>Data/Hora: {dataFormatada}</Text>
-                  <Text style={styles.resumoTexto}>Assento: {ing.reservaAssento?.assento?.codigo || 'N/A'}</Text>
-                  <Text style={styles.resumoTexto}>Código: {ing.codigo}</Text>
-                  <Text style={styles.resumoTexto}>
-                    Status: {ing.utilizadoEm ? 'UTILIZADO' : 'VÁLIDO'}
-                  </Text>
-                </View>
-              );
-            })}
-
-            <TouchableOpacity style={styles.voltarBotao} onPress={() => setTela('inicio')}>
-              <Text style={styles.voltar}>VOLTAR AO INÍCIO</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-
         {tela === 'operador' && (
           <View style={styles.secao}>
             <Text style={styles.secaoTitulo}>Painel do Operador</Text>
-            <Text style={styles.secaoDescricao}>Gerencie filmes, sessões e valide ingressos.</Text>
+            <Text style={styles.secaoDescricao}>Gerencie filmes, salas, sessões e ingressos</Text>
             <TouchableOpacity
-              style={styles.botao}
+              style={styles.botaoPainel}
+              onPress={() => {
+                setModoBalcao(true);
+                setFilmeSelecionado(null);
+                setTela('filmesBalcao');
+              }}
+            >
+              <Text style={styles.botaoPainelTexto}>VENDA NO BALCÃO</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.botaoPainel}
               onPress={() => {
                 setFilmeEditandoId(null);
                 setTitulo('');
@@ -1143,65 +1143,21 @@ export default function App() {
                 setTela('cadastro');
               }}
             >
-              <Text style={styles.botaoTexto}>CADASTRAR NOVO FILME</Text>
+              <Text style={styles.botaoPainelTexto}>+ CADASTRAR NOVO FILME</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.botao} onPress={abrirCadastroSessao}>
-              <Text style={styles.botaoTexto}>CADASTRAR NOVA SESSÃO</Text>
+            <TouchableOpacity style={styles.botaoPainel} onPress={() => setTela('cadastroSala')}>
+              <Text style={styles.botaoPainelTexto}>+ CADASTRAR NOVA SALA</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.botao} onPress={() => setTela('filmes')}>
-              <Text style={styles.botaoTexto}>GERENCIAR FILMES</Text>
+            <TouchableOpacity style={styles.botaoPainel} onPress={abrirCadastroSessao}>
+              <Text style={styles.botaoPainelTexto}>+ CADASTRAR NOVA SESSÃO</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.botao} onPress={carregarRelatorio}>
-              <Text style={styles.botaoTexto}>CONSULTAR RELATÓRIOS</Text>
+            <TouchableOpacity style={styles.botaoPainel} onPress={carregarRelatorio}>
+              <Text style={styles.botaoPainelTexto}>RELATÓRIO DE OCUPAÇÃO</Text>
             </TouchableOpacity>
-
-            <View style={styles.divisor} />
-
-            <Text style={styles.secaoSubtitulo}>Validação de Ingressos</Text>
-            {campo(codigoIngresso, setCodigoIngresso, 'Código do ingresso')}
-            <TouchableOpacity
-              style={[styles.botao, consultandoIngresso && styles.botaoDesativado]}
-              onPress={consultarIngresso}
-              disabled={consultandoIngresso}
-            >
-              <Text style={styles.botaoTexto}>
-                {consultandoIngresso ? 'CONSULTANDO...' : 'CONSULTAR INGRESSO'}
-              </Text>
+            <TouchableOpacity style={styles.botaoPainel} onPress={() => setTela('validarIngresso')}>
+              <Text style={styles.botaoPainelTexto}>VALIDAR INGRESSO (QR / CÓDIGO)</Text>
             </TouchableOpacity>
-
-            {ingressoConsultado && (
-              <View style={styles.resumoContainer}>
-                <Text style={styles.resumoTitulo}>Ingresso Encontrado</Text>
-                <Text style={styles.resumoTexto}>Código: {ingressoConsultado.codigo}</Text>
-                <Text style={styles.resumoTexto}>
-                  Filme: {ingressoConsultado.reservaAssento.reserva.sessao.filme.titulo}
-                </Text>
-                <Text style={styles.resumoTexto}>
-                  Sala: {ingressoConsultado.reservaAssento.reserva.sessao.sala.nome}
-                </Text>
-                <Text style={styles.resumoTexto}>
-                  Assento: {ingressoConsultado.reservaAssento.assento.codigo}
-                </Text>
-                <Text style={styles.resumoTexto}>
-                  Status:{' '}
-                  {ingressoConsultado.utilizadoEm ? 'UTILIZADO' : 'VÁLIDO PARA ENTRADA'}
-                </Text>
-
-                {!ingressoConsultado.utilizadoEm && (
-                  <TouchableOpacity
-                    style={[styles.botao, validandoIngresso && styles.botaoDesativado]}
-                    onPress={validarIngresso}
-                    disabled={validandoIngresso}
-                  >
-                    <Text style={styles.botaoTexto}>
-                      {validandoIngresso ? 'VALIDANDO...' : 'VALIDAR ENTRADA'}
-                    </Text>
-                  </TouchableOpacity>
-                )}
-              </View>
-            )}
-
-            <TouchableOpacity style={styles.voltarBotao} onPress={() => setTela('inicio')}>
+            <TouchableOpacity onPress={() => setTela('inicio')}>
               <Text style={styles.voltar}>VOLTAR AO INÍCIO</Text>
             </TouchableOpacity>
           </View>
@@ -1209,110 +1165,297 @@ export default function App() {
 
         {tela === 'cadastroSessao' && (
           <View style={styles.secao}>
-            <Text style={styles.secaoTitulo}>Cadastrar nova sessão</Text>
-            <Text style={styles.secaoDescricao}>Selecione o filme, a sala e defina horário e preço.</Text>
-
-            <Text style={styles.labelCampo}>Selecione o filme:</Text>
-            {filmes.map((filme) => (
-              <TouchableOpacity
-                key={filme.id}
-                style={[
-                  styles.opcaoSelecao,
-                  filmeSessaoId === filme.id && styles.opcaoSelecionada,
-                ]}
-                onPress={() => setFilmeSessaoId(filme.id)}
-              >
-                <Text
+            <Text style={styles.secaoTitulo}>Cadastrar Sessão</Text>
+            <Text style={styles.secaoDescricao}>Selecione o filme, a sala, data e preço</Text>
+            <Text style={styles.label}>Filme:</Text>
+            <ScrollView horizontal style={styles.seletorHorizontal}>
+              {filmes.map((filme) => (
+                <TouchableOpacity
+                  key={filme.id}
                   style={[
-                    styles.opcaoTexto,
-                    filmeSessaoId === filme.id && styles.opcaoTextoSelecionado,
+                    styles.chip,
+                    filmeSessaoId === filme.id && styles.chipSelecionado,
                   ]}
+                  onPress={() => setFilmeSessaoId(filme.id)}
                 >
-                  {filme.titulo}
-                </Text>
-              </TouchableOpacity>
-            ))}
-
-            <Text style={styles.labelCampo}>Selecione a sala:</Text>
-            {carregandoSalas && <Text style={styles.mensagem}>Carregando salas...</Text>}
-            {salas.map((sala) => (
-              <TouchableOpacity
-                key={sala.id}
-                style={[
-                  styles.opcaoSelecao,
-                  salaSessaoId === sala.id && styles.opcaoSelecionada,
-                ]}
-                onPress={() => setSalaSessaoId(sala.id)}
-              >
-                <Text
-                  style={[
-                    styles.opcaoTexto,
-                    salaSessaoId === sala.id && styles.opcaoTextoSelecionado,
-                  ]}
-                >
-                  {sala.nome}
-                </Text>
-              </TouchableOpacity>
-            ))}
-
+                  <Text style={styles.chipTexto}>{filme.titulo}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+            <Text style={styles.label}>Sala:</Text>
+            {carregandoSalas ? (
+              <Text style={styles.mensagem}>Carregando salas...</Text>
+            ) : (
+              <ScrollView horizontal style={styles.seletorHorizontal}>
+                {salas.map((sala) => (
+                  <TouchableOpacity
+                    key={sala.id}
+                    style={[
+                      styles.chip,
+                      salaSessaoId === sala.id && styles.chipSelecionado,
+                    ]}
+                    onPress={() => setSalaSessaoId(sala.id)}
+                  >
+                    <Text style={styles.chipTexto}>{sala.nome}</Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            )}
             {campo(dataSessao, setDataSessao, 'Data (AAAA-MM-DD)')}
             {campo(horaSessao, setHoraSessao, 'Horário (HH:MM)')}
-            {campo(precoSessao, setPrecoSessao, 'Preço do ingresso (ex: 25.00)', false, 'numeric')}
-
+            {campo(precoSessao, setPrecoSessao, 'Preço (R$ ex: 25.00)', false, 'numeric')}
             <TouchableOpacity
               style={[styles.botao, cadastrandoSessao && styles.botaoDesativado]}
               onPress={cadastrarSessao}
               disabled={cadastrandoSessao}
             >
-              <Text style={styles.botaoTexto}>
-                {cadastrandoSessao ? 'CADASTRANDO...' : 'CADASTRAR SESSÃO'}
-              </Text>
+              <Text style={styles.botaoTexto}>{cadastrandoSessao ? 'CADASTRANDO...' : 'CADASTRAR SESSÃO'}</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.voltarBotao} onPress={() => setTela('operador')}>
+            <TouchableOpacity onPress={() => setTela('operador')}>
               <Text style={styles.voltar}>VOLTAR AO PAINEL</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {tela === 'sessoes' && (
+          <View style={styles.secao}>
+            <Text style={styles.secaoTitulo}>{modoBalcao ? 'Sessões para venda no balcão' : 'Sessões disponíveis'}</Text>
+            <Text style={styles.secaoDescricao}>{filmeSelecionado?.titulo}</Text>
+            {carregandoSessoes ? (
+              <Text style={styles.mensagem}>Carregando sessões...</Text>
+            ) : sessoes.length === 0 ? (
+              <Text style={styles.mensagem}>Nenhuma sessão cadastrada para este filme.</Text>
+            ) : (
+              sessoes.map((sessao) => (
+                <View style={styles.sessaoCard} key={sessao.id}>
+                  <Text style={styles.sessaoData}>
+                    {new Date(sessao.dataHora).toLocaleString('pt-BR')}
+                  </Text>
+                  <Text style={styles.sessaoSala}>{sessao.sala.nome}</Text>
+                  <Text style={styles.sessaoPreco}>
+                    R$ {Number(sessao.preco).toFixed(2).replace('.', ',')}
+                  </Text>
+                  <TouchableOpacity
+                    style={styles.botaoIngresso}
+                    onPress={() => carregarAssentos(sessao)}
+                  >
+                    <Text style={styles.botaoIngressoTexto}>SELECIONAR ASSENTOS</Text>
+                  </TouchableOpacity>
+                </View>
+              ))
+            )}
+            <TouchableOpacity style={styles.voltarBotao} onPress={() => setTela('inicio')}>
+              <Text style={styles.voltar}>VOLTAR AO INÍCIO</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {tela === 'assentos' && (
+          <View style={styles.secao}>
+            <Text style={styles.secaoTitulo}>{modoBalcao ? 'Venda no balcão — Assentos' : 'Mapa de Assentos'}</Text>
+            <Text style={styles.secaoDescricao}>
+              {sessaoSelecionada?.filme.titulo} • {sessaoSelecionada?.sala.nome}
+            </Text>
+            <View style={styles.telaCinema}>
+              <Text style={styles.telaCinemaTexto}>TELA DO CINEMA</Text>
+            </View>
+            {carregandoAssentos ? (
+              <Text style={styles.mensagem}>Carregando mapa de assentos...</Text>
+            ) : (
+              <View style={styles.mapaAssentos}>
+                {assentos.map((assento) => {
+                  const ocupado = assento.status !== 'LIVRE';
+                  const selecionado = assentosSelecionados.includes(assento.id);
+                  return (
+                    <TouchableOpacity
+                      key={assento.id}
+                      style={[
+                        styles.assento,
+                        ocupado && styles.assentoOcupado,
+                        selecionado && styles.assentoSelecionado,
+                      ]}
+                      disabled={ocupado}
+                      onPress={() => selecionarAssento(assento.id)}
+                    >
+                      <Text
+                        style={[
+                          styles.assentoTexto,
+                          (ocupado || selecionado) && styles.assentoTextoDestaque,
+                        ]}
+                      >
+                        {assento.codigo}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            )}
+            <TouchableOpacity
+              style={[styles.botao, reservando && styles.botaoDesativado]}
+              onPress={modoBalcao ? venderNoBalcao : reservarAssentos}
+              disabled={reservando || confirmandoCompra || assentosSelecionados.length === 0}
+            >
+              <Text style={styles.botaoTexto}>{reservando ? 'RESERVANDO...' : 'PROSSEGUIR PARA PAGAMENTO'}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.voltarBotao}
+              onPress={() => filmeSelecionado && carregarSessoes(filmeSelecionado)}
+            >
+              <Text style={styles.voltar}>VOLTAR ÀS SESSÕES</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {tela === 'pagamento' && (
+          <View style={styles.secao}>
+            <Text style={styles.secaoTitulo}>Confirmação e Pagamento</Text>
+            <Text style={styles.secaoDescricao}>Reserva realizada temporariamente</Text>
+            <Text style={styles.textoDestaque}>Assentos reservados: {reservaAssentos.join(', ')}</Text>
+            <Text style={styles.sessaoPreco}>
+              Total: R${' '}
+              {(
+                reservaAssentos.length * Number(sessaoSelecionada?.preco || 0)
+              ).toFixed(2).replace('.', ',')}
+            </Text>
+            <TouchableOpacity
+              style={[styles.botao, confirmandoCompra && styles.botaoDesativado]}
+              onPress={confirmarCompra}
+              disabled={confirmandoCompra}
+            >
+              <Text style={styles.botaoTexto}>{confirmandoCompra ? 'CONFIRMANDO...' : 'CONFIRMAR PAGAMENTO'}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.voltarBotao}
+              onPress={() => sessaoSelecionada && carregarAssentos(sessaoSelecionada)}
+            >
+              <Text style={styles.voltar}>CANCELAR E VOLTAR</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {tela === 'meusIngressos' && (
+          <View style={styles.secao}>
+            <Text style={styles.secaoTitulo}>Meus Ingressos</Text>
+            <Text style={styles.secaoDescricao}>Histórico de ingressos adquiridos</Text>
+            {carregandoIngressosCliente ? (
+              <Text style={styles.mensagem}>Carregando ingressos...</Text>
+            ) : ingressosCliente.length === 0 ? (
+              <Text style={styles.mensagem}>Você ainda não possui ingressos comprados.</Text>
+            ) : (
+              ingressosCliente.map((item) => (
+                <View style={styles.sessaoCard} key={item.id}>
+                  <Text style={styles.filmeTitulo}>
+                    {item.reservaAssento.reserva.sessao.filme.titulo}
+                  </Text>
+                  <Text style={styles.sessaoSala}>
+                    Sala: {item.reservaAssento.reserva.sessao.sala.nome} | Assento: {item.reservaAssento.assento.codigo}
+                  </Text>
+                  <Text style={styles.sessaoData}>
+                    Data/Hora: {new Date(item.reservaAssento.reserva.sessao.dataHora).toLocaleString('pt-BR')}
+                  </Text>
+                  <Text style={styles.textoDestaque}>Código: {item.codigo}</Text>
+                  <Text style={[styles.sessaoPreco, { color: item.utilizadoEm ? '#ef4444' : '#22c55e' }]}>
+                    Status: {item.utilizadoEm ? 'Já Utilizado' : 'Válido para entrada'}
+                  </Text>
+                </View>
+              ))
+            )}
+            <TouchableOpacity style={styles.voltarBotao} onPress={() => setTela('inicio')}>
+              <Text style={styles.voltar}>VOLTAR AO INÍCIO</Text>
             </TouchableOpacity>
           </View>
         )}
 
         {tela === 'relatorios' && (
           <View style={styles.secao}>
-            <Text style={styles.secaoTitulo}>Relatórios de Ocupação</Text>
-            <Text style={styles.secaoDescricao}>Visão geral de faturamento e vendas por sessão.</Text>
-
-            {carregandoRelatorio && <Text style={styles.mensagem}>Carregando relatório...</Text>}
-            {!!erroRelatorio && <Text style={styles.erro}>{erroRelatorio}</Text>}
-
-            {relatorio && (
+            <Text style={styles.secaoTitulo}>Relatório de Ocupação</Text>
+            <Text style={styles.secaoDescricao}>Métricas de ocupação e faturamento das sessões</Text>
+            {carregandoRelatorio ? (
+              <Text style={styles.mensagem}>Carregando relatórios...</Text>
+            ) : erroRelatorio ? (
+              <Text style={styles.erro}>{erroRelatorio}</Text>
+            ) : relatorio ? (
               <>
-                <View style={styles.resumoContainer}>
-                  <Text style={styles.resumoTitulo}>Resumo Geral</Text>
-                  <Text style={styles.resumoTexto}>Total de Sessões: {relatorio.resumo.totalSessoes}</Text>
-                  <Text style={styles.resumoTexto}>Ingressos Vendidos: {relatorio.resumo.ingressosVendidos}</Text>
-                  <Text style={styles.resumoTexto}>Capacidade Total: {relatorio.resumo.capacidadeTotal}</Text>
-                  <Text style={styles.resumoTexto}>
-                    Faturamento Total: R$ {Number(relatorio.resumo.faturamentoTotal).toFixed(2).replace('.', ',')}
+                <View style={styles.cardResumo}>
+                  <Text style={styles.textoResumo}>Total de Sessões: {relatorio.resumo.totalSessoes}</Text>
+                  <Text style={styles.textoResumo}>Ingressos Vendidos: {relatorio.resumo.ingressosVendidos}</Text>
+                  <Text style={styles.textoResumo}>
+                    Ocupação Geral: {relatorio.resumo.ocupacaoGeral.toFixed(1)}%
                   </Text>
-                  <Text style={styles.resumoTexto}>
-                    Ocupação Geral: {Number(relatorio.resumo.ocupacaoGeral).toFixed(1)}%
+                  <Text style={styles.textoResumo}>
+                    Faturamento Total: R$ {relatorio.resumo.faturamentoTotal.toFixed(2).replace('.', ',')}
                   </Text>
                 </View>
-
-                <Text style={styles.secaoSubtitulo}>Sessões</Text>
                 {relatorio.sessoes.map((s) => (
-                  <View style={styles.resumoContainer} key={s.sessaoId}>
-                    <Text style={styles.resumoTitulo}>{s.filme}</Text>
-                    <Text style={styles.resumoTexto}>Sala: {s.sala}</Text>
-                    <Text style={styles.resumoTexto}>Data/Hora: {new Date(s.dataHora).toLocaleString('pt-BR')}</Text>
-                    <Text style={styles.resumoTexto}>Ingressos Vendidos: {s.ingressosVendidos} / {s.capacidade}</Text>
-                    <Text style={styles.resumoTexto}>Ocupação: {Number(s.ocupacaoPercentual).toFixed(1)}%</Text>
-                    <Text style={styles.resumoTexto}>
-                      Faturamento: R$ {Number(s.faturamento).toFixed(2).replace('.', ',')}
+                  <View style={styles.sessaoCard} key={s.sessaoId}>
+                    <Text style={styles.filmeTitulo}>{s.filme}</Text>
+                    <Text style={styles.sessaoSala}>{s.sala} • {new Date(s.dataHora).toLocaleString('pt-BR')}</Text>
+                    <Text style={styles.sessaoDetalhes}>
+                      Vendas: {s.ingressosVendidos} / {s.capacidade} ({s.ocupacaoPercentual.toFixed(1)}%)
+                    </Text>
+                    <Text style={styles.sessaoPreco}>
+                      Faturamento: R$ {s.faturamento.toFixed(2).replace('.', ',')}
                     </Text>
                   </View>
                 ))}
               </>
-            )}
+            ) : null}
+            <TouchableOpacity style={styles.voltarBotao} onPress={() => setTela('operador')}>
+              <Text style={styles.voltar}>VOLTAR AO PAINEL</Text>
+            </TouchableOpacity>
+          </View>
+        )}
 
+        {tela === 'validarIngresso' && (
+          <View style={styles.secao}>
+            <Text style={styles.secaoTitulo}>Validar Ingresso</Text>
+            <Text style={styles.secaoDescricao}>Insira o código do ingresso para consulta e portaria</Text>
+            {campo(codigoIngresso, setCodigoIngresso, 'Código do ingresso (ex: ING-XXXXXX)')}
+            <TouchableOpacity
+              style={[styles.botao, consultandoIngresso && styles.botaoDesativado]}
+              onPress={consultarIngresso}
+              disabled={consultandoIngresso}
+            >
+              <Text style={styles.botaoTexto}>{consultandoIngresso ? 'CONSULTANDO...' : 'BUSCAR INGRESSO'}</Text>
+            </TouchableOpacity>
+            {ingressoConsultado && (
+              <View style={styles.cardIngresso}>
+                <Text style={styles.filmeTitulo}>
+                  {ingressoConsultado.reservaAssento.reserva.sessao.filme.titulo}
+                </Text>
+                <Text style={styles.sessaoSala}>
+                  Sala: {ingressoConsultado.reservaAssento.reserva.sessao.sala.nome} | Assento:{' '}
+                  {ingressoConsultado.reservaAssento.assento.codigo}
+                </Text>
+                <Text style={styles.sessaoData}>
+                  Data/Hora:{' '}
+                  {new Date(
+                    ingressoConsultado.reservaAssento.reserva.sessao.dataHora
+                  ).toLocaleString('pt-BR')}
+                </Text>
+                <Text
+                  style={[
+                    styles.statusIngresso,
+                    { color: ingressoConsultado.utilizadoEm ? '#ef4444' : '#22c55e' },
+                  ]}
+                >
+                  {ingressoConsultado.utilizadoEm
+                    ? `Já Utilizado em: ${new Date(ingressoConsultado.utilizadoEm).toLocaleString('pt-BR')}`
+                    : 'Ingresso VÁLIDO'}
+                </Text>
+                {!ingressoConsultado.utilizadoEm && (
+                  <TouchableOpacity
+                    style={[styles.botao, validandoIngresso && styles.botaoDesativado, { marginTop: 12 }]}
+                    onPress={validarIngresso}
+                    disabled={validandoIngresso}
+                  >
+                    <Text style={styles.botaoTexto}>
+                      {validandoIngresso ? 'VALIDANDO...' : 'CONFIRMAR ENTRADA'}
+                    </Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            )}
             <TouchableOpacity style={styles.voltarBotao} onPress={() => setTela('operador')}>
               <Text style={styles.voltar}>VOLTAR AO PAINEL</Text>
             </TouchableOpacity>
@@ -1327,357 +1470,359 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#0f172a',
-    paddingTop: 40,
     paddingHorizontal: 16,
+    paddingTop: 40,
   },
   header: {
-    alignItems: 'center',
-    marginBottom: 24,
-    paddingVertical: 12,
+    marginBottom: 20,
     borderBottomWidth: 1,
     borderBottomColor: '#1e293b',
+    paddingBottom: 16,
   },
   logo: {
     fontSize: 28,
-    fontWeight: '900',
-    color: '#f8fafc',
+    fontWeight: 'bold',
+    color: '#ffffff',
     letterSpacing: 2,
   },
   logoDestaque: {
     color: '#e11d48',
   },
   subtitulo: {
-    fontSize: 10,
-    color: '#64748b',
-    letterSpacing: 3,
-    marginTop: 4,
+    color: '#94a3b8',
+    fontSize: 12,
+    letterSpacing: 1,
+    marginTop: 2,
   },
   headerConta: {
     marginTop: 12,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
   },
   usuarioTexto: {
-    fontSize: 12,
-    color: '#94a3b8',
-    marginBottom: 4,
+    color: '#e2e8f0',
+    fontSize: 14,
+    fontWeight: '600',
   },
   linkHeader: {
-    fontSize: 12,
-    color: '#38bdf8',
+    color: '#e11d48',
     fontWeight: 'bold',
+    fontSize: 12,
   },
   banner: {
     backgroundColor: '#1e293b',
-    borderRadius: 16,
-    padding: 24,
+    borderRadius: 12,
+    padding: 20,
     marginBottom: 24,
-    alignItems: 'flex-start',
+    borderLeftWidth: 4,
+    borderLeftColor: '#e11d48',
   },
   bannerPequeno: {
-    fontSize: 10,
     color: '#e11d48',
+    fontSize: 12,
     fontWeight: 'bold',
-    letterSpacing: 2,
-    marginBottom: 8,
+    letterSpacing: 1,
   },
   bannerTitulo: {
+    color: '#ffffff',
     fontSize: 24,
     fontWeight: 'bold',
-    color: '#f8fafc',
-    marginBottom: 8,
-    lineHeight: 32,
+    marginVertical: 8,
   },
   bannerDescricao: {
-    fontSize: 14,
     color: '#94a3b8',
+    fontSize: 14,
     marginBottom: 16,
   },
   secao: {
-    marginBottom: 32,
+    marginBottom: 24,
   },
   secaoTitulo: {
+    color: '#ffffff',
     fontSize: 20,
     fontWeight: 'bold',
-    color: '#f8fafc',
-    marginBottom: 4,
   },
   secaoDescricao: {
+    color: '#94a3b8',
     fontSize: 14,
-    color: '#64748b',
     marginBottom: 16,
-  },
-  secaoSubtitulo: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#f8fafc',
-    marginTop: 16,
-    marginBottom: 12,
   },
   filmeCard: {
     flexDirection: 'row',
     backgroundColor: '#1e293b',
-    borderRadius: 12,
-    overflow: 'hidden',
-    marginBottom: 16,
-    borderWidth: 1,
-    borderColor: '#334155',
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 12,
+    alignItems: 'center',
   },
   poster: {
-    width: 100,
-    height: 150,
+    width: 70,
+    height: 100,
+    borderRadius: 6,
+    backgroundColor: '#334155',
   },
   filmeInfo: {
     flex: 1,
-    padding: 12,
-    justifyContent: 'center',
+    marginLeft: 12,
   },
   filmeTitulo: {
+    color: '#ffffff',
     fontSize: 16,
     fontWeight: 'bold',
-    color: '#f8fafc',
-    marginBottom: 4,
   },
   filmeGenero: {
-    fontSize: 12,
     color: '#e11d48',
-    marginBottom: 4,
+    fontSize: 12,
     fontWeight: '600',
+    marginTop: 2,
   },
   filmeDetalhes: {
-    fontSize: 12,
     color: '#94a3b8',
-    marginBottom: 12,
+    fontSize: 12,
+    marginVertical: 4,
   },
   botaoIngresso: {
     backgroundColor: '#e11d48',
-    paddingVertical: 8,
+    paddingVertical: 6,
     paddingHorizontal: 12,
-    borderRadius: 8,
-    alignItems: 'center',
+    borderRadius: 4,
+    alignSelf: 'flex-start',
+    marginTop: 6,
   },
   botaoIngressoTexto: {
-    color: '#f8fafc',
+    color: '#ffffff',
     fontSize: 12,
     fontWeight: 'bold',
   },
   botaoSecundario: {
     backgroundColor: '#334155',
     paddingVertical: 6,
-    paddingHorizontal: 10,
-    borderRadius: 6,
-    alignItems: 'center',
+    paddingHorizontal: 12,
+    borderRadius: 4,
+    alignSelf: 'flex-start',
     marginTop: 6,
   },
   botaoSecundarioTexto: {
-    color: '#f8fafc',
-    fontSize: 11,
+    color: '#ffffff',
+    fontSize: 12,
     fontWeight: 'bold',
   },
   botao: {
     backgroundColor: '#e11d48',
-    borderRadius: 12,
-    paddingVertical: 14,
+    paddingVertical: 12,
+    borderRadius: 8,
     alignItems: 'center',
-    marginBottom: 12,
+    marginTop: 12,
   },
   botaoDesativado: {
     opacity: 0.6,
   },
   botaoTexto: {
-    color: '#f8fafc',
-    fontSize: 14,
+    color: '#ffffff',
     fontWeight: 'bold',
-    letterSpacing: 1,
+    fontSize: 14,
+  },
+  botaoPainel: {
+    backgroundColor: '#1e293b',
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#334155',
+  },
+  botaoPainelTexto: {
+    color: '#ffffff',
+    fontWeight: 'bold',
+    fontSize: 14,
   },
   botaoOperador: {
     backgroundColor: '#1e293b',
-    borderRadius: 12,
-    paddingVertical: 14,
+    paddingVertical: 12,
+    borderRadius: 8,
     alignItems: 'center',
-    marginBottom: 32,
+    marginBottom: 20,
     borderWidth: 1,
     borderColor: '#334155',
   },
   botaoOperadorTexto: {
     color: '#94a3b8',
-    fontSize: 14,
     fontWeight: 'bold',
+    fontSize: 12,
     letterSpacing: 1,
   },
   input: {
     backgroundColor: '#1e293b',
-    borderRadius: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    color: '#f8fafc',
-    fontSize: 14,
-    marginBottom: 12,
+    color: '#ffffff',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 6,
+    marginBottom: 10,
     borderWidth: 1,
     borderColor: '#334155',
   },
   inputMultiline: {
-    height: 100,
+    height: 80,
     textAlignVertical: 'top',
   },
-  erro: {
-    color: '#f43f5e',
-    fontSize: 12,
-    marginBottom: 12,
-  },
-  mensagem: {
-    color: '#94a3b8',
+  label: {
+    color: '#e2e8f0',
     fontSize: 14,
-    textAlign: 'center',
-    marginVertical: 16,
-  },
-  voltar: {
-    color: '#94a3b8',
-    fontSize: 12,
-    textAlign: 'center',
-    marginTop: 8,
     fontWeight: 'bold',
-  },
-  voltarBotao: {
     marginTop: 8,
-    alignItems: 'center',
+    marginBottom: 6,
   },
-  sessaoCard: {
+  seletorHorizontal: {
     flexDirection: 'row',
-    backgroundColor: '#1e293b',
-    borderRadius: 12,
-    padding: 16,
     marginBottom: 12,
-    alignItems: 'center',
-    justifyContent: 'space-between',
+  },
+  chip: {
+    backgroundColor: '#1e293b',
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 16,
+    marginRight: 8,
     borderWidth: 1,
     borderColor: '#334155',
   },
-  sessaoSala: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#f8fafc',
-    marginBottom: 4,
+  chipSelecionado: {
+    backgroundColor: '#e11d48',
+    borderColor: '#e11d48',
+  },
+  chipTexto: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  sessaoCard: {
+    backgroundColor: '#1e293b',
+    borderRadius: 8,
+    padding: 14,
+    marginBottom: 10,
+    borderLeftWidth: 3,
+    borderLeftColor: '#e11d48',
   },
   sessaoData: {
+    color: '#ffffff',
     fontSize: 14,
-    color: '#94a3b8',
-    marginBottom: 4,
-  },
-  sessaoPreco: {
-    fontSize: 14,
-    color: '#38bdf8',
     fontWeight: 'bold',
   },
-  telaCinemaContainer: {
-    alignItems: 'center',
-    marginBottom: 24,
+  sessaoSala: {
+    color: '#94a3b8',
+    fontSize: 12,
+    marginTop: 2,
   },
-  telaCinemaBarra: {
-    width: '80%',
-    height: 4,
-    backgroundColor: '#38bdf8',
-    borderRadius: 2,
-    marginBottom: 4,
+  sessaoDetalhes: {
+    color: '#cbd5e1',
+    fontSize: 12,
+    marginTop: 4,
+  },
+  sessaoPreco: {
+    color: '#22c55e',
+    fontSize: 14,
+    fontWeight: 'bold',
+    marginTop: 4,
+  },
+  telaCinema: {
+    backgroundColor: '#334155',
+    paddingVertical: 6,
+    borderRadius: 4,
+    alignItems: 'center',
+    marginVertical: 16,
   },
   telaCinemaTexto: {
+    color: '#94a3b8',
     fontSize: 10,
-    color: '#64748b',
+    fontWeight: 'bold',
     letterSpacing: 2,
   },
-  assentosGrid: {
+  mapaAssentos: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     justifyContent: 'center',
     gap: 8,
-    marginBottom: 24,
+    marginVertical: 10,
   },
-  legendaContainer: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: 16,
-    marginBottom: 24,
-  },
-  legendaItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  legendaTexto: {
-    fontSize: 12,
-    color: '#94a3b8',
-  },
-  resumoContainer: {
+  assento: {
+    width: 40,
+    height: 40,
     backgroundColor: '#1e293b',
-    borderRadius: 12,
+    borderRadius: 6,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#334155',
+  },
+  assentoOcupado: {
+    backgroundColor: '#475569',
+    borderColor: '#475569',
+  },
+  assentoSelecionado: {
+    backgroundColor: '#e11d48',
+    borderColor: '#e11d48',
+  },
+  assentoTexto: {
+    color: '#cbd5e1',
+    fontSize: 10,
+    fontWeight: 'bold',
+  },
+  assentoTextoDestaque: {
+    color: '#ffffff',
+  },
+  textoDestaque: {
+    color: '#ffffff',
+    fontSize: 16,
+    fontWeight: 'bold',
+    marginVertical: 4,
+  },
+  cardResumo: {
+    backgroundColor: '#1e293b',
+    borderRadius: 8,
     padding: 16,
     marginBottom: 16,
     borderWidth: 1,
     borderColor: '#334155',
   },
-  resumoTitulo: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#f8fafc',
-    marginBottom: 8,
-  },
-  resumoTexto: {
+  textoResumo: {
+    color: '#ffffff',
     fontSize: 14,
-    color: '#94a3b8',
+    fontWeight: '600',
     marginBottom: 4,
   },
-  labelCampo: {
-    fontSize: 14,
-    color: '#94a3b8',
-    marginBottom: 6,
-    fontWeight: '600',
-  },
-  opcaoSelecao: {
+  cardIngresso: {
     backgroundColor: '#1e293b',
     borderRadius: 8,
-    padding: 12,
-    marginBottom: 8,
+    padding: 16,
+    marginTop: 16,
     borderWidth: 1,
     borderColor: '#334155',
   },
-  opcaoSelecionada: {
-    borderColor: '#e11d48',
-    backgroundColor: '#2d1b24',
-  },
-  opcaoTexto: {
+  statusIngresso: {
     fontSize: 14,
+    fontWeight: 'bold',
+    marginTop: 8,
+  },
+  erro: {
+    color: '#ef4444',
+    fontSize: 12,
+    marginBottom: 10,
+  },
+  mensagem: {
     color: '#94a3b8',
+    fontSize: 14,
+    textAlign: 'center',
+    marginVertical: 12,
   },
-  opcaoTextoSelecionado: {
-    color: '#f8fafc',
-    fontWeight: 'bold',
-  },
-  divisor: {
-    height: 1,
-    backgroundColor: '#334155',
-    marginVertical: 24,
-  },
-  assentoBotao: {
-    width: 40,
-    height: 40,
-    borderRadius: 8,
-    backgroundColor: '#16a34a',
-    justifyContent: 'center',
+  voltarBotao: {
+    marginTop: 16,
     alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#22c55e',
   },
-  assentoOcupado: {
-    backgroundColor: '#475569',
-    borderColor: '#64748b',
-    opacity: 0.65,
-  },
-  assentoSelecionado: {
-    backgroundColor: '#e11d48',
-    borderColor: '#fb7185',
-  },
-  assentoTexto: {
-    fontSize: 11,
+  voltar: {
+    color: '#94a3b8',
+    textAlign: 'center',
+    marginTop: 12,
+    fontSize: 12,
     fontWeight: 'bold',
-    color: '#ffffff',
-  }
+  },
 });
