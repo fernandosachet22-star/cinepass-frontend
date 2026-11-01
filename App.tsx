@@ -259,8 +259,8 @@ export default function App() {
       setErroAutenticacao('Preencha nome, e-mail e senha.');
       return;
     }
-    if (senhaUsuario.length < 6) {
-      setErroAutenticacao('A senha deve possuir pelo menos 6 caracteres.');
+    if (senhaUsuario.length < 8) {
+      setErroAutenticacao('A senha deve possuir pelo menos 8 caracteres.');
       return;
     }
 
@@ -943,7 +943,7 @@ export default function App() {
               style={styles.input}
               value={senhaUsuario}
               onChangeText={setSenhaUsuario}
-              placeholder="Senha (mínimo 6 caracteres)"
+              placeholder="Senha (mínimo 8 caracteres)"
               placeholderTextColor="#64748b"
               secureTextEntry
               autoCapitalize="none"
