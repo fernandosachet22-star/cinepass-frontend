@@ -875,6 +875,20 @@ export default function App() {
   const operadorAutorizado =
     !!usuario && (usuario.perfil === 'OPERADOR' || usuario.perfil === 'ADMINISTRADOR');
 
+  const assentosPorFileira = assentos.reduce<Record<string, Assento[]>>(
+    (grupos, assento) => {
+      if (!grupos[assento.fileira]) {
+        grupos[assento.fileira] = [];
+      }
+
+      grupos[assento.fileira].push(assento);
+      return grupos;
+    },
+    {}
+  );
+
+  const fileirasOrdenadas = Object.keys(assentosPorFileira).sort();
+
   return (
     <View style={styles.container}>
       <StatusBar style="light" />
@@ -1286,35 +1300,41 @@ export default function App() {
               <Text style={styles.mensagem}>Carregando mapa de assentos...</Text>
             ) : (
               <View style={styles.mapaAssentos}>
-                {assentos.map((assento) => {
-                  const reservado = assento.status === 'RESERVADO';
-                  const vendido = assento.status === 'VENDIDO';
-                  const ocupado = reservado || vendido;
-                  const selecionado = assentosSelecionados.includes(assento.id);
+                {fileirasOrdenadas.map((fileira) => (
+                  <View key={fileira} style={styles.fileiraAssentos}>
+                    {assentosPorFileira[fileira]
+                      .sort((a, b) => a.numero - b.numero)
+                      .map((assento) => {
+                        const reservado = assento.status === 'RESERVADO';
+                        const vendido = assento.status === 'VENDIDO';
+                        const ocupado = reservado || vendido;
+                        const selecionado = assentosSelecionados.includes(assento.id);
 
-                  return (
-                    <TouchableOpacity
-                      key={assento.id}
-                      style={[
-                        styles.assento,
-                        reservado && styles.assentoReservado,
-                        vendido && styles.assentoVendido,
-                        selecionado && styles.assentoSelecionado,
-                      ]}
-                      disabled={ocupado}
-                      onPress={() => selecionarAssento(assento.id)}
-                    >
-                      <Text
-                        style={[
-                          styles.assentoTexto,
-                          (ocupado || selecionado) && styles.assentoTextoDestaque,
-                        ]}
-                      >
-                        {assento.codigo}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
+                        return (
+                          <TouchableOpacity
+                            key={assento.id}
+                            style={[
+                              styles.assento,
+                              reservado && styles.assentoReservado,
+                              vendido && styles.assentoVendido,
+                              selecionado && styles.assentoSelecionado,
+                            ]}
+                            disabled={ocupado}
+                            onPress={() => selecionarAssento(assento.id)}
+                          >
+                            <Text
+                              style={[
+                                styles.assentoTexto,
+                                (ocupado || selecionado) && styles.assentoTextoDestaque,
+                              ]}
+                            >
+                              {assento.codigo}
+                            </Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                  </View>
+                ))}
               </View>
             )}
             <TouchableOpacity
@@ -1765,11 +1785,15 @@ const styles = StyleSheet.create({
     letterSpacing: 2,
   },
   mapaAssentos: {
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: 12,
+    marginVertical: 10,
+  },
+  fileiraAssentos: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
     justifyContent: 'center',
     gap: 8,
-    marginVertical: 10,
   },
   assento: {
     width: 40,
