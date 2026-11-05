@@ -1259,19 +1259,46 @@ export default function App() {
             <View style={styles.telaCinema}>
               <Text style={styles.telaCinemaTexto}>TELA DO CINEMA</Text>
             </View>
+
+            <View style={styles.legendaAssentos}>
+              <View style={styles.itemLegenda}>
+                <View style={[styles.corLegenda, styles.assentoLivre]} />
+                <Text style={styles.textoLegenda}>Livre</Text>
+              </View>
+
+              <View style={styles.itemLegenda}>
+                <View style={[styles.corLegenda, styles.assentoReservado]} />
+                <Text style={styles.textoLegenda}>Reservado</Text>
+              </View>
+
+              <View style={styles.itemLegenda}>
+                <View style={[styles.corLegenda, styles.assentoVendido]} />
+                <Text style={styles.textoLegenda}>Vendido</Text>
+              </View>
+
+              <View style={styles.itemLegenda}>
+                <View style={[styles.corLegenda, styles.assentoSelecionado]} />
+                <Text style={styles.textoLegenda}>Selecionado</Text>
+              </View>
+            </View>
+
             {carregandoAssentos ? (
               <Text style={styles.mensagem}>Carregando mapa de assentos...</Text>
             ) : (
               <View style={styles.mapaAssentos}>
                 {assentos.map((assento) => {
-                  const ocupado = assento.status !== 'LIVRE';
+                  const reservado = assento.status === 'RESERVADO';
+                  const vendido = assento.status === 'VENDIDO';
+                  const ocupado = reservado || vendido;
                   const selecionado = assentosSelecionados.includes(assento.id);
+
                   return (
                     <TouchableOpacity
                       key={assento.id}
                       style={[
                         styles.assento,
-                        ocupado && styles.assentoOcupado,
+                        reservado && styles.assentoReservado,
+                        vendido && styles.assentoVendido,
                         selecionado && styles.assentoSelecionado,
                       ]}
                       disabled={ocupado}
@@ -1747,20 +1774,49 @@ const styles = StyleSheet.create({
   assento: {
     width: 40,
     height: 40,
-    backgroundColor: '#1e293b',
+    backgroundColor: '#16a34a',
     borderRadius: 6,
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: '#334155',
+    borderColor: '#15803d',
   },
-  assentoOcupado: {
-    backgroundColor: '#475569',
+  assentoLivre: {
+    backgroundColor: '#16a34a',
+    borderColor: '#15803d',
+  },
+  assentoReservado: {
+    backgroundColor: '#eab308',
+    borderColor: '#ca8a04',
+  },
+  assentoVendido: {
+    backgroundColor: '#64748b',
     borderColor: '#475569',
   },
   assentoSelecionado: {
     backgroundColor: '#e11d48',
     borderColor: '#e11d48',
+  },
+  legendaAssentos: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    gap: 16,
+    marginBottom: 12,
+  },
+  itemLegenda: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  corLegenda: {
+    width: 14,
+    height: 14,
+    borderRadius: 3,
+  },
+  textoLegenda: {
+    color: '#cbd5e1',
+    fontSize: 12,
   },
   assentoTexto: {
     color: '#cbd5e1',
